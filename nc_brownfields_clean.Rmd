@@ -1,0 +1,123 @@
+---
+title: "<font size=5>Week 12: Unsupervised Classification techniques - Principal Components Analysis </font>"
+output:
+  html_document:
+    theme: cerulean
+    highlight: tango
+    toc: yes
+    toc_depth: 5
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '6'
+---
+```{r setup, include=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(knitr)    
+library(patchwork)
+library(GGally)
+library(skimr)
+library(factoextra)
+library(ggfortify)
+library(magrittr)
+library(haven)
+library(naniar)
+library(janitor)
+
+knitr::opts_chunk$set(fig.asp = 1.2, fig.align = "center", message=FALSE, out.width = "70%") 
+```
+
+```{r}
+# read in data  
+nc_brownfields <- read.csv("NC_Brownfields_Location_View (1).csv")
+
+View(nc_brownfields)
+
+```
+
+
+```{r}
+#Selecting necessary columns
+nc_brownfields <- nc_brownfields %>%
+  dplyr::select(City, County, BF_Acreage, x, y, BF_Name, Status, Address)
+nc_brownfields
+
+glimpse(nc_brownfields)
+#This shows that BF_Acreage, BF_ID, and BF_Number are all characters instead of numeric
+head(nc_brownfields)
+tail(nc_brownfields)
+
+```
+
+
+```{r}
+#Cleaning names
+nc_brownfields <- nc_brownfields %>% clean_names()
+nc_brownfields
+```
+
+
+```{r}
+#Fix missing values
+is.na(nc_brownfields) <- nc_brownfields == "-"
+is.na(nc_brownfields) <- nc_brownfields == ""
+
+nc_brownfields
+#View(nc_brownfields)
+
+vis_miss(nc_brownfields) #1.1% of data is missing
+
+
+#Removing NAs
+nc_brownfields <- na.omit(nc_brownfields)
+
+nc_brownfields
+```
+
+
+```{r}
+nc_brownfields
+
+#fixing character observations to numeric (BF_Acreage is a character datatype)
+
+nc_brownfields$bf_acreage = as.numeric(nc_brownfields$bf_acreage)
+
+nc_brownfields
+
+#View(nc_brownfields)
+         
+```
+
+```{r}
+#How many counties are in this dataset?
+nc_brownfields %>% 
+  group_by(county) %>%
+  tally() #76 counties when I excluded NAs
+
+#Ok now just for aggregated brownfield acreage: 
+
+
+#Combining data by county - just want 78 rows with total bf_acreage per county
+
+nc_brownfields_aggregated <- nc_brownfields %>% group_by(county) %>%
+  summarize(bf_acreage=sum(bf_acreage)) #ugh okay looks like I do need to change data type
+
+nc_brownfields_aggregated
+
+View(nc_brownfields_aggregated)
+```
+
+
+```{r}
+#saving data
+save(nc_brownfields_aggregated, file = "nc_brownfields_aggregated.Rdata")
+
+write.table(nc_brownfields_aggregated, file = "nc_brownfields_aggregated.csv",
+            sep = "\t", row.names = F)
+
+```
+
+

@@ -1,0 +1,798 @@
+---
+title: "PLCY715 Final Project: Team DarkOliveGreen3"
+author: "Eli Gullett, Morgan Harron, Sloan Edemann, Victoria Neff"
+date: '2022-04-18'
+output: html_document
+---
+##Welcome to Our Project
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#knitr::opts_knit$set(root.dir = '~/Documents/GitHub/final-team-projects-darkolivegreen3')
+```
+
+**This PLCY 715 final project analyzes the relationship between negative health outcomes and living in proximity to Brownfields, which are defined by the Environmental Protection Agency as any property where development becomes complicated by the presence or potential presences of "a hazardous substance, pollutant, or contaminant".**
+
+**Our research will also investigate the role "social determinants of health" play in this relationship. These social determinants refer to those of lower socioeconomic status or otherwise marginalized communities. In particular, we look to find disproportionate levels of proximity to Brownfields as well as disproportionate negative health outcomes based on race, age, educational attainment, and income level.**
+
+#RMD Set Up
+
+Install Library & Import Datasets
+
+```{r, include=FALSE}
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(janitor)
+library(skimr)
+library(tidyverse)
+library(patchwork)
+library(GGally)
+library(factoextra)
+library(ggfortify)
+library(magrittr)
+library(infer)
+library(moderndive)
+```
+
+Reading in our joined + cleaned dataset:
+
+```{r, inclue=FALSE}
+full.join <- read.csv("C:/Users/gulle/OneDrive/Documents/GitHub/final-team-projects-darkolivegreen3/clean_full_data.csv")
+full.join
+```
+
+##Data Cleaning
+
+More Data Cleaning
+```{r, echo=FALSE}
+#We clean the column names for easier analysis
+full.join <- full.join %>% clean_names()
+full.join
+
+full.join <- full.join %>%
+  rename(county = county_x)%>%
+  rename(per_highlead_h = per_high_lead_h)%>%
+  dplyr::select(-county_y)
+full.join
+
+#Dropping redundant columns
+full.join <- full.join %>%
+  dplyr::select(-contains("t_"))%>%
+  dplyr::select(-contains("p_"))%>%
+  dplyr::select(-contains("b_"))
+full.join
+
+full.join <- full.join %>%
+  dplyr::select(-five_nine)
+full.join
+
+full.join <- full.join %>%
+  dplyr::select(-very_high_lead_num)
+full.join
+
+#Making sure num_tested_older is numeric
+full.join$num_tested_older <- as.numeric(gsub(",","", full.join$num_tested_older))
+full.join
+
+```
+
+##Exploratory Data Analysis
+
+```{r}
+#Lets look at the missingness
+library(naniar)
+vis_miss(full.join)
+
+#A lot of missingness for a few variables, but these aren't being used for our analysis, so we can drop them
+full.join <- full.join %>%
+  dplyr::select(-contains("ptraf"))%>%
+  dplyr::select(-contains("pwdis"))%>%
+  dplyr::select(-state_name)
+full.join
+
+vis_miss(full.join) #<- not perfect, but a lot better
+
+head(full.join)
+#Distribution of data
+hist(pull(full.join, per_highlead_h))
+hist(pull(full.join, bf_acreage))
+hist(pull(full.join, minorpct))
+hist(pull(full.join, lowincpct))
+hist(pull(full.join, over64pct))
+hist(pull(full.join, pre1960pct))
+hist(pull(full.join, vuleopct))
+hist(pull(full.join, cancer))
+hist(pull(full.join, resp))
+
+#Finding correlations
+full.join %>% dplyr::select(per_tested:bf_acreage, minorpop:pm25) %>%
+  ggcorr()
+```
+
+EDA Interpretation:
+**The data is overall pretty normal in distribution. Bf_acreage is an exeption, but it will be tranformed into a proporition further in the code. Running the correlation EDA also gives us some interesting output. There does seem to be some positive correlation between bf_acreage and high lead, but it seems neutral-to-positive for cancer.**
+
+##Unsupervised Machine Learning: K-Means
+
+Creating a matrix and scaling relevant variables
+
+```{r}
+#Create Matrix
+ej.matrix <- full.join %>% 
+  magrittr::set_rownames(.$county)%>%
+  dplyr::select(-county)
+ej.matrix
+
+names(ej.matrix)
+
+#Checking to make sure our variables are numeric
+str(full.join)
+
+#Dropping non numeric variables
+full.join <- full.join %>%
+  dplyr::select(-num_tested)%>%
+  dplyr::select(-num_tested_older)
+full.join
+
+
+#Scale variables <- our data was really difficult to scale so this ended up being convoluted
+ej.scaled <- full.join %>%
+    mutate_if(is.numeric, scale)
+ej.scaled
+
+ej.scaled <- ej.scaled %>% 
+  magrittr::set_rownames(.$county)%>%
+  dplyr::select(-county)
+ej.scaled
+
+ej.scaled %>% drop_na()
+ej.scaled
+
+dplyr::select_if(ej.scaled, is.numeric)
+ej.scaled
+
+ej.scaled <- ej.scaled %>%
+  dplyr::select(-region)
+ej.scaled
+
+ej.scaled <- ej.scaled %>%
+  na.omit()
+ej.scaled
+```
+Interpretation:
+**To improve our analysis, we are going to use K-Cluster Means and PCA. We start by creating a matrix to remove non-numeric columns and then scaling, or normalizing, all of our variables to produce more accurate results.**
+
+Identifying Clusters
+
+```{r}
+#Calculating distance and dissimilarity
+distance <- get_dist(ej.scaled[c(1:10),] %>%  dplyr::select(contains("_h")), method="spearman")
+fviz_dist(distance, gradient = list(low = "#00AFBB", mid = "white", high = "#FC4E07"))
+
+#Scree plot to identify clusters
+set.seed(123)
+
+fviz_nbclust(ej.scaled, kmeans, method = "wss")
+```
+
+Interpretation:
+**The above chunk allows us to see which counties might be more or less similar. We also create a skree plot to identify the optimal number of clusters, which is 3 in this case.**
+
+Calculating clusters
+
+```{r}
+k3 <- kmeans(ej.scaled, centers = 3, nstart = 1000, algorithm = "Lloyd")
+k3
+```
+
+Plot cluster outputs
+
+```{r}
+ej.scaled %>% 
+  mutate(cluster = k3$cluster,
+         county = row.names(ej.scaled)) %>%
+  ggplot(aes(per_highlead_h, cancer,color = factor(cluster), label = county)) +
+  geom_text() +
+  theme_bw()
+ej.scaled
+```
+
+Interpretation:
+**While these clusters aren't perfectly dissimilar, and some overlap exists, there are patterns. Blue and green seem to be highest in terms of cancer toxicity risks, which the red counties seem to be overall lower risks.**
+##Unsupervised Machine learning: Principle Component Analysis
+
+Calculating PCA
+```{r}
+pca.ej.health <- prcomp(ej.scaled %>% dplyr::select(contains("_h")))
+pca.ej.health
+```
+
+Analyzing PCA Output
+
+```{r}
+names(pca.ej.health)
+
+pca.ej.health$rotation
+
+#Extract PC1
+pca.ej.health$rotation[,1]
+pca.ej.health$rotation[,2]
+
+#Using get_pca_var
+get_pca_var(pca.ej.health)$contrib[,] #<- % contribution to each PC
+sum(get_pca_var(pca.ej.health)$contrib[,1])
+```
+Interpretation:
+**This output allows us to understand how much each variable is contributing to the variation in the principle components. Dim 1 is being heavily influenced by the cancer and respiratory variables. Dim 2 is being heavily influenced by the percentage of children with elevated BLLs.**
+
+
+Plotting PCA
+
+```{r}
+biplot(pca.ej.health, scale=0, title = "PCA - Environmental Health in NC", alpha.var=0.3, repel = TRUE)
+
+```
+
+Plotting Clusters
+
+```{r}
+k3 <- kmeans(ej.scaled %>% dplyr::select(contains("_h")), centers = 3, nstart = 1000, algorithm = 'Lloyd') 
+
+fviz_cluster(k3, data = ej.scaled %>% dplyr::select(contains("_h")),
+             palette = c("#FF0000", "#00A08A", "#F2AD00"),
+               star.plot = TRUE,
+               repel = TRUE,
+             show.clust.cent = TRUE) + 
+               scale_shape_manual(values=c(15,16,17))+
+              ggtitle('K-means Clustering', subtitle='across first two Principal Components') +
+              guides(fill = guide_legend(override.aes = aes(label = "")))+
+  theme_classic() +
+             theme(legend.position="right")
+```
+
+Interpetation:
+**As previously discussed, Dim1 is largely being driven by poor air quality and cancer toxicity risks, while Dim 2 is largely driven by lead levels. Cluster 1 does relatively better on lead, but worse on air quality and cancer toxicity. Cluster 2 does best overally along both dimensions, while Cluster 3 is being largely driven by increased blood lead levels.**
+
+#Variable Transformations
+Adding clusters to dataframe & creating brownfield proportion variable
+```{r}
+#Adding the clusters to our dataset to improve regessions
+ej.scaled$cluster <- k3$cluster
+ej.scaled
+
+#Creating brownfields as a proportion of population
+ej.scaled$bf_prop <- ej.scaled$bf_acreage/ej.scaled$acstotpop
+ej.scaled
+
+full.join$bf_prop <- full.join$bf_acreage/full.join$acstotpop
+full.join
+
+str(ej.scaled)
+ej.scaled$cluster = as.factor(ej.scaled$cluster)
+str(ej.scaled)
+
+#Adding these variables made some of the names messy so we clean them up
+ej.scaled %>% clean_names()
+ej.scaled
+
+view(ej.scaled)
+```
+
+##Regressions: Lead
+
+Lead & Brownfields
+```{r}
+#Modern Dive is Needed
+##Basic linear regression: x = Brownfields y = health outcomes
+
+#Analyzing brownfield acreage + lead
+lead_brown_model <- lm(per_highlead_h ~ bf_prop + vuleopct + lesshspct + over64pct + pre1960pct, data = ej.scaled)
+get_regression_table(lead_brown_model)
+
+summary(lead_brown_model)
+
+#An additional unit increase in brownfield proximity decreases the likelihood of having elevated BLLs in children by 0.023 percentage points. The P-value is pretty big and the adjusted R-squared is low (0.12), so we probably want to adjust our model.
+
+#Plotting the Relationship
+ggplot() +
+     geom_point(data = ej.scaled, 
+               aes(bf_prop, per_highlead_h, color = cluster),
+               size = 3) +
+     geom_smooth(method="lm", se=FALSE)+
+     labs(y = "% of Children with Elevated Blood Lead Levels", x = "Brownfield Acreage") +
+     theme_bw()  
+
+#The visualization indicates that this relationship is likely spurious at best. Data points are concentrated around 0.
+ej.scaled <- ej.scaled %>% clean_names()
+str(ej.scaled)
+
+#Hypothesis Testing
+set.seed(123) 
+
+null_dist <- full.join %>%
+   specify(per_highlead_h ~ bf_prop) %>%
+   hypothesize(null = "independence") %>%
+   generate(reps = 1000, type = "permute") %>%
+   fit()
+null_dist
+# First calculate the fitted estimates from our observed data
+obs_fit <- full.join %>% 
+  specify(per_highlead_h ~ bf_prop) %>%
+  fit()
+obs_fit
+
+#Visualizing obs_fit along the null_dist
+visualize(null_dist) +
+  shade_p_value(obs_stat = obs_fit, direction = "two-sided")
+
+#Confidence Intervals
+conf_ints <- get_confidence_interval(null_dist, 
+                                     level = .95,
+                                     point_estimate = obs_fit)
+
+null_dist %>%
+  visualize() +
+  shade_p_value(obs_stat=obs_fit, direction="two-sided") +
+  shade_confidence_interval(endpoints = conf_ints)
+
+#Get P-Value
+null_dist %>% get_p_value(obs_stat = obs_fit, direction="two-sided")
+```
+Interpretation:
+
+**The null distribution is within the confidence interval, indicating that we must fail to reject the null hypothesis.**
+
+Lead & Brownfields: Race as a Moderator
+```{r}
+#Multiple linear regressions: Is race a moderating factor?
+
+lead_race_model <- lm(per_highlead_h ~ bf_prop*minorpct + vuleopct + lesshspct + over64pct + pre1960pct, data = ej.scaled)
+get_regression_table(lead_race_model)
+
+summary(lead_race_model)
+
+#Similar problems as before. The p-value is even higher now.
+```
+
+```{r}
+#Plotting relationship between minority % and lead
+
+ggplot(ej.scaled, aes(x=bf_prop*minorpct, y=per_highlead_h, color = minorpct)) +
+  geom_point(alpha=0.75) +
+  geom_smooth(method="lm",se = FALSE) +
+  theme_bw()
+
+#Data points are pretty scattered.
+  
+#Hypothesis Testing
+set.seed(123) 
+null_dist <- full.join %>%
+  specify(formula = per_highlead_h ~ bf_prop*minorpct) %>%
+  hypothesize(null = "independence") %>%
+  generate(reps = 1000, type="permute", variables=c(bf_prop, minorpct)) %>%
+  fit()
+visualize(null_dist)
+
+# First calculate the fitted estimates from our observed data
+obs_fit <- full.join %>%
+           specify(formula = per_highlead_h ~ bf_prop*minorpct) %>%
+           fit()
+obs_fit
+
+#Visualizing obs_fit along the null_dist
+visualize(null_dist) +
+  shade_p_value(obs_stat = obs_fit, direction = "two-sided")
+
+#Confidence Intervals
+conf_ints <- get_confidence_interval(null_dist, 
+                                     level = .95,
+                                     point_estimate = obs_fit)
+
+null_dist %>%
+  visualize() +
+  shade_p_value(obs_stat=obs_fit, direction="two-sided") +
+  shade_confidence_interval(endpoints = conf_ints)
+
+#Get P-Value
+null_dist %>% get_p_value(obs_stat = obs_fit, direction="two-sided")
+```
+Interpretation:
+
+**It appears that this analysis will also result in us failing to reject the null hypothesis as the null distribution is still comfortably in the confidence interval.**
+
+
+Lead & Brownfields: Income as a Moderator
+
+```{r}
+#Multiple linear regressions: Is income a moderating factor?
+lead_inc_model <- lm(per_highlead_h ~ bf_prop*lowincpct + lesshs + minorpct + over64pct + pre1960pct, data = ej.scaled)
+get_regression_table(lead_inc_model)
+
+summary(lead_inc_model)
+
+#The interaction variable (bf_prop*lowincpct) appears to have a slightly positive effect on the likelihood of having elevated BLLs. The adjusted r-squared is small (0.09), so let's look closer.
+
+#Relationship between income and lead
+ggplot(ej.scaled, aes(x=bf_prop*lowincpct, y=per_highlead_h, color = lowincpct)) +
+  geom_point(alpha=0.75) +
+  geom_smooth(method="lm",se = FALSE) +
+  theme_bw()
+
+#Data points are scattered, but there seems to be a stronger relationship.
+
+#Hypothesis Testing
+set.seed(123) 
+null_dist <- full.join %>%
+  specify(formula = per_highlead_h ~ bf_prop*lowincpct) %>%
+  hypothesize(null = "independence") %>%
+  generate(reps = 1000, type="permute", variables=c(bf_prop)) %>%
+  fit()
+visualize(null_dist)
+
+# First calculate the fitted estimates from our observed data
+obs_fit <- full.join %>%
+           specify(formula = per_highlead_h ~ bf_prop*lowincpct) %>%
+           fit()
+  
+obs_fit
+
+#Visualizing obs_fit along the null_dist
+visualize(null_dist) +
+  shade_p_value(obs_stat = obs_fit, direction = "two-sided")
+
+#Confidence Intervals
+conf_ints <- get_confidence_interval(null_dist, 
+                                     level = .95,
+                                     point_estimate = obs_fit)
+
+null_dist %>%
+  visualize() +
+  shade_p_value(obs_stat=obs_fit, direction="two-sided") +
+  shade_confidence_interval(endpoints = conf_ints)
+
+#Get P-Value
+null_dist %>% get_p_value(obs_stat = obs_fit, direction="two-sided")
+```
+Interpretation:
+**While the relationship here seemed slightly stronger and moved in a positive relationship, we still failt to reject the null hypothesis.**
+
+Lead & Brownfields: Housing Age as a Moderator
+
+```{r}
+#Multiple linear regressions: Is housing quality a moderating factor?
+
+lead_house_model <- lm(per_highlead_h ~ bf_prop*pre1960pct + lesshs + minorpct + over64pct, data = ej.scaled)
+get_regression_table(lead_house_model)
+summary(lead_house_model)
+#Interesting! There is a slight positive effect from the interaction variable (bf_prop:pre1960pct) on elevated BLLs. Small adjusted R-squared (0.9), but a relatively smaller p-value (0.06)
+
+#Plotting relationship 
+#Housing and Lead
+ggplot(ej.scaled, aes(x=bf_prop*pre1960pct, y=per_highlead_h, color = pre1960pct)) +
+  geom_point(alpha=0.75) +
+  geom_smooth(method="lm",se = FALSE) +
+  theme_bw() #<- not super promising, the line is pretty flat
+     
+#Hypothesis Testing
+
+set.seed(123) 
+null_dist <- full.join %>%
+  specify(formula = per_highlead_h ~ bf_prop*pre1960pct) %>%
+  hypothesize(null = "independence") %>%
+  generate(reps = 1000, type="permute", variables=c(bf_prop, pre1960pct)) %>%
+  fit()
+visualize(null_dist)
+
+# First calculate the fitted estimates from our observed data
+obs_fit <- full.join %>%
+           specify(formula = per_highlead_h ~ bf_prop*pre1960pct) %>%
+           fit()
+  
+obs_fit
+
+#Visualizing obs_fit along the null_dist
+visualize(null_dist) +
+  shade_p_value(obs_stat = obs_fit, direction = "two-sided")
+
+#Confidence Intervals
+conf_ints <- get_confidence_interval(null_dist, 
+                                     level = .95,
+                                     point_estimate = obs_fit)
+
+null_dist %>%
+  visualize() +
+  shade_p_value(obs_stat=obs_fit, direction="two-sided") +
+  shade_confidence_interval(endpoints = conf_ints)
+
+#Get P-Value
+null_dist %>% get_p_value(obs_stat = obs_fit, direction="two-sided")
+```
+Interpretation:
+**The p-value falls inside of the null distribution for interaction effect, but outside for the effect of just pre-1960 housing percentage. We fail to reject the null hypothesis. Good datapoint on the effect of housing age on lead exposure though!**
+
+Lead & Brownfields: Age as a Moderator
+
+```{r}
+#Multiple linear regressions: Is age a moderating factor?
+lead_age_model <- lm(per_highlead_h ~ bf_prop*over64pct + lesshs + minorpct + lowincpct + pre1960pct, data = ej.scaled)
+get_regression_table(lead_age_model)
+summary(lead_age_model)
+
+#Plotting BFs & Lead: Age as moderator
+ggplot(ej.scaled, aes(x=bf_prop*over64pct, y=per_highlead_h, color=over64pct)) +
+  geom_point(alpha=0.75) +
+  geom_smooth(method="lm",se = FALSE) +
+  labs(y = "% of Children with Elevated BLLs", x = "Brownfield Acreage")+
+  theme_bw()
+
+#Hypothesis Testing
+set.seed(123) 
+null_dist <- full.join %>%
+  specify(formula = per_highlead_h ~ bf_prop*over64pct) %>%
+  hypothesize(null = "independence") %>%
+  generate(reps = 1000, type="permute", variables=c(bf_prop, over64pct)) %>%
+  fit()
+visualize(null_dist)
+
+# First calculate the fitted estimates from our observed data
+obs_fit <- full.join %>%
+           specify(formula = per_highlead_h ~ bf_prop*over64pct) %>%
+           fit()
+  
+obs_fit
+
+#Visualizing obs_fit along the null_dist
+visualize(null_dist) +
+  shade_p_value(obs_stat = obs_fit, direction = "two-sided")
+
+#Confidence Intervals
+conf_ints <- get_confidence_interval(null_dist, 
+                                     level = .95,
+                                     point_estimate = obs_fit)
+
+null_dist %>%
+  visualize() +
+  shade_p_value(obs_stat=obs_fit, direction="two-sided") +
+  shade_confidence_interval(endpoints = conf_ints)
+
+#Get P-Value
+null_dist %>% get_p_value(obs_stat = obs_fit, direction="two-sided")
+```
+Interpretation:
+
+**We fail to reject the null hypothesis.**
+
+Lead & Brownfields: Education as a Moderator
+```{r}
+#Modeling relationship
+lead_edu_model <- lm(per_highlead_h ~ bf_prop*lesshspct + minorpct + lowincpct + pre1960pct, data = ej.scaled)
+get_regression_table(lead_edu_model)
+summary(lead_edu_model) #<- incredibly small, negative effect and a really large p-value. adjusted r-squared is small too (0.1). going to skip hypothesis testing as relationship already appears weak.
+
+#Plotting BFs & Lead: Education as moderator
+ggplot(ej.scaled, aes(x=bf_prop*lesshspct, y=per_highlead_h, color=lesshspct)) +
+  geom_point(alpha=0.75) +
+  geom_smooth(method="lm",se = FALSE) +
+  labs(y = "% of Children with Elevated BLLs", x = "Brownfield Acreage")+
+  theme_bw() #<- This appears to be spurious at best.
+```
+
+
+Brownfields & Lead: Adding in Clusters
+```{r}
+#Liner regression
+lead_bf_cluster_model <- lm(per_highlead_h ~ bf_prop*cluster, data=ej.scaled)
+get_regression_points(lead_bf_cluster_model)
+summary(lead_bf_cluster_model) #<- BIG THING: there appers to be a positive (and signficant) relationship between brownfield proximity and elevated BLLs in cluster 3
+
+#Plotting with clusters
+ggplot(ej.scaled, aes(x=bf_prop, y=per_highlead_h, color=cluster)) +
+  geom_point(alpha=0.75) +
+  geom_smooth(method="lm",se = FALSE) +
+  labs(y = "% of Children with Elevated BLLs", x = "Brownfield Acreage")+
+  theme_bw() #<- this creates a better understanding of how these relationships play out in different counties
+```
+
+##Regressions: Cancer
+
+Brownfields & Cancer: Linear regression
+```{r}
+#Brownfield & Cancer
+model_vuleopct <- lm(cancer ~ bf_prop, data=ej.scaled)
+summary(model_vuleopct)
+ggplot(data=ej.scaled, aes(x=bf_prop, y=cancer)) +
+    geom_point(fill="blue",
+             alpha = 0.9, 
+             size=4) +
+  geom_smooth(method="lm", se=FALSE) +
+  labs(y = "Cancer risks per county", x = "Brownfield acreage per county") +
+  theme_bw() 
+#Hypothesis Testing
+get_regression_table(model_vuleopct)
+summary(model_vuleopct)
+##H~0: Brownfield acreage in a county has no impact on lifetime cancer risks from inhalation of air toxics.
+##H~A: Brownfield acreage in a county has an impact on lifetime cancer risks from inhalation of air toxics..
+##P-values: (bf = 0.491)
+#P value(s) greater than 0.05, accept the null hypothesis.
+```
+
+Brownfields & Cancer: Vulnerability Index as Moderator
+```{r}
+#Brownfield & Cancer (moderator: vuleopct)
+model_vuleopct <- lm(cancer ~ bf_prop*vuleopct, data=ej.scaled)
+summary(model_vuleopct)
+ggplot(data=ej.scaled, aes(x=bf_prop, y=cancer)) +
+  geom_point(aes(color=vuleopct),
+             fill="blue",
+             alpha = 0.9, 
+             size=4) +
+  geom_smooth(method="lm", se=FALSE) +
+  labs(y = "Cancer risks per county", x = "Brownfield acreage per county") +
+  theme_bw() 
+#Hypothesis Testing
+get_regression_table(model_vuleopct)
+summary(model_vuleopct)
+##H~0: The impact of brownfield acreage in a county on lifetime cancer risks from inhalation of air toxics is unaffected by vulnerability.
+##H~A: The impact of brownfield acreage in a county on lifetime cancer risks from inhalation of air toxics is affected by vulnerability.
+##P-values: (bf*vuleopct = 0.006; vuleopct = 0.003; bf= 0.463)
+#P value(s) less than 0.05, reject the null hypothesis.
+```
+
+Brownfields & Cancer: Race as a Moderator
+```{r}
+#Brownfield & Cancer (moderator: race)
+##minorpop
+model_minorpop <- lm(cancer ~ bf_prop*minorpop, data=ej.scaled)
+summary(model_minorpop)
+ggplot(data=ej.scaled, aes(x=bf_prop, y=cancer)) +
+  geom_point(aes(color=minorpop),
+             fill="blue",
+             alpha = 0.9, 
+             size=4) +
+  geom_smooth(method="lm", se=FALSE) +
+  labs(y = "Cancer risks per county", x = "Brownfield acreage per county") +
+  theme_bw() 
+get_regression_table(model_minorpop)
+##minorpct
+model_minorpct <- lm(cancer ~ bf_prop*minorpct, data=ej.scaled)
+summary(model_minorpct)
+ggplot(data=ej.scaled, aes(x=bf_prop, y=cancer)) +
+  geom_point(aes(color=minorpct),
+             fill="blue",
+             alpha = 0.9, 
+             size=4) +
+  geom_smooth(method="lm", se=FALSE) +
+  labs(y = "Cancer risks per county", x = "Brownfield acreage per county") +
+  theme_bw() 
+get_regression_table(model_minorpct)
+##compare: minorpct looks better!
+#Hypothesis Testing
+get_regression_table(model_minorpct)
+summary(model_minorpct)
+##H~0: The impact of brownfield acreage in a county on lifetime cancer risks from inhalation of air toxics is unaffected by the percent people of color in a county.
+##H~A: The impact of brownfield acreage in a county on lifetime cancer risks from inhalation of air toxics is affected by the percent people of color in a county.
+##P-values: (bf*minorpct = 0.001; minorpct = 0.008; bf= 0.905)
+#P value(s) less than 0.05, reject the null hypothesis. 
+```
+
+
+Brownfields & Cancer: Income as a Moderator
+```{r}
+#Brownfield & Cancer (moderator: income)
+model_lowincome <- lm(cancer ~ bf_prop*lowincome, data=ej.scaled)
+summary(model_lowincome)
+ggplot(data=ej.scaled, aes(x=bf_prop, y=cancer)) +
+  geom_point(aes(color=lowincome),
+             fill="blue",
+             alpha = 0.9, 
+             size=4) +
+  geom_smooth(method="lm", se=FALSE) +
+  labs(y = "Cancer risks per county", x = "Brownfield acreage per county") +
+  theme_bw() 
+#Hypothesis Testing
+get_regression_table(model_lowincome)
+summary(model_lowincome)
+##H~0: The impact of brownfield acreage in a county on lifetime cancer risks from inhalation of air toxics is unaffected by the count of low-income individuals in a county.
+##H~A: The impact of brownfield acreage in a county on lifetime cancer risks from inhalation of air toxics is affected by the count of low-income individuals in a county.
+##P-values: (bf*lowincome = 0.558; lowincome = 0.288; bf= 0.411)
+#P value(s) larger than 0.05, accept the null hypothesis.
+```
+
+Brownfields & Cancer: Education as a Moderator
+```{r}
+#Brownfield & Cancer (moderator: education)
+model_lesshspct <- lm(cancer ~ bf_prop*lesshspct, data=ej.scaled)
+summary(model_lesshspct)
+ggplot(data=ej.scaled, aes(x=bf_prop, y=cancer)) +
+  geom_point(aes(color=lesshspct),
+             fill="blue",
+             alpha = 0.9, 
+             size=4) +
+  geom_smooth(method="lm", se=FALSE) +
+  labs(y = "Cancer risks per county", x = "Brownfield acreage per county") +
+  theme_bw() 
+#Hypothesis Testing
+get_regression_table(model_lesshspct)
+summary(model_lesshspct)
+##H~0: The impact of brownfield acreage in a county on lifetime cancer risks from inhalation of air toxics is unaffected by the percent of individuals age 25 or over with less than a high school degree in a county.
+##H~A: The impact of brownfield acreage in a county on lifetime cancer risks from inhalation of air toxics is affected by the percent of individuals age 25 or over with less than a high school degree in a county.
+##P-values: (bf*lesshspct = 0.396; lesshspct = 0.109; bf= 0.900)
+#P value(s) larger than 0.05, accept the null hypothesis.
+```
+
+Brownfields & Cancer: Age as Moderator
+```{r}
+#Brownfield & Cancer (moderator: age)
+##over64
+model_over64 <- lm(cancer ~ bf_prop*over64, data=ej.scaled)
+summary(model_over64)
+ggplot(data=ej.scaled, aes(x=bf_prop, y=cancer)) +
+  geom_point(aes(color=over64),
+             fill="blue",
+             alpha = 0.9, 
+             size=4) +
+  geom_smooth(method="lm", se=FALSE) +
+  labs(y = "Cancer risks per county", x = "Brownfield acreage per county") +
+  theme_bw() 
+get_regression_table(model_over64)
+##over64pct
+model_over64pct <- lm(cancer ~ bf_prop*over64pct, data=ej.scaled)
+summary(model_over64pct)
+ggplot(data=ej.scaled, aes(x=bf_prop, y=cancer)) +
+  geom_point(aes(color=over64pct),
+             fill="blue",
+             alpha = 0.9, 
+             size=4) +
+  geom_smooth(method="lm", se=FALSE) +
+  labs(y = "Cancer risks per county", x = "Brownfield acreage per county") +
+  theme_bw() 
+get_regression_table(model_over64pct)
+##compare: over64pct looks better
+#Hypothesis Testing
+get_regression_table(model_over64pct)
+summary(model_over64pct)
+##H~0: The impact of brownfield acreage in a county on lifetime cancer risks from inhalation of air toxics is unaffected by the percent of individuals over age 64 in a county.
+##H~A: The impact of brownfield acreage in a county on lifetime cancer risks from inhalation of air toxics is affected by the percent of individuals over age 64 in a county.
+##P-values: (bf*over64pct = 0.006; over64pct = 0.106; logbf= 0.088)
+#P value(s) less than 0.05, reject the null hypothesis. 
+```
+
+Brownfields & Cancer: Old Housing as Moderator
+```{r}
+#Brownfield & Cancer (moderator: housing pre-1960)
+model_pre1960 <- lm(cancer ~ bf_prop*pre1960, data=ej.scaled)
+summary(model_pre1960)
+ggplot(data=ej.scaled, aes(x=bf_prop, y=cancer)) +
+  geom_point(aes(color=pre1960),
+             fill="blue",
+             alpha = 0.9, 
+             size=4) +
+  geom_smooth(method="lm", se=FALSE) +
+  labs(y = "Cancer risks per county", x = "Brownfield acreage per county") +
+  theme_bw() 
+get_regression_table(model_pre1960)
+#Hypothesis Testing
+get_regression_table(model_pre1960)
+summary(model_pre1960)
+##H~0: The impact of brownfield acreage in a county on lifetime cancer risks from inhalation of air toxics is unaffected by the count of housing units built pre-1960 in a county.
+##H~A: The impact of brownfield acreage in a county on lifetime cancer risks from inhalation of air toxics is affected by the count of housing units built pre-1960 in a county.
+##P-values: (bf*pre1960 = 0.074; pre1960 = 0.500; bf= 0.725)
+#P value(s) larger than 0.05, accept the null hypothesis.
+```
+
+##Final Interpretations
+
+Interpretation of Lead Results:
+*A few general themes emerge. Firstly, there appears to be no significant relationship between elevated blood lead levels and proximity to brownfields. The only exception occurred when the variable for older housing was included as a moderator, but this was likely mostly driven by that aspect of the built environment.*
+*There does; however, appear to be a significant and positive relationship between cancer risks and brownfield proximity.*
+
+Interpretation of Cancer Results:
+
+*No significant relationship appears between lifetime cancer risks from inhalation of air toxics and brownfield proximity. But, when the variables vulnerability, percent people of color, and percent of individuals over age 64 were included as moderators individually, a significant relationship was present.*
+
+*Vulnerability: brownfield proximity alone is not statistically significant, but including vulnerability as a moderator shows that there is a statistically significant positive relationship between brownfield proximity and cancer risks. Each additional unit increase in brownfield proximity increased the likelihood of lifetime cancer risks by 0.292 percentage points when vulnerability was considered as a moderator.*
+
+*Percent people of color: brownfield proximity alone is not statistically significant, but including percent people of color as a moderator shows that there is a statistically significant positive relationship between brownfield proximity and cancer risks. Each additional unit increase in brownfield proximity increased the likelihood of lifetime cancer risks by 0.239 percentage points when race was considered as a moderator.*
+
+*Percent of individuals over age 64: brownfield proximity alone is not statistically significant, but including percent people of color as a moderator shows that there is a statistically significant negative relationship between brownfield proximity and cancer risks. Each additional unit increase in brownfield proximity decreased the likelihood of lifetime cancer risks by 0.141 percentage points when age was considered as a moderator.*

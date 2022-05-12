@@ -1,0 +1,121 @@
+---
+title: "project_data_cleaning"
+author: "Eli Gullett"
+date: '2022-04-21'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(janitor)
+library(skimr)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+ej <- read.csv("C:/Users/gulle/OneDrive/Documents/gillings/EJSCREEN_2020_USPR.csv") 
+ej
+library(janitor)
+library(dplyr)
+ej <- ej %>%
+  filter(ST_ABBREV == "NC")
+ej
+
+ej <- ej %>%
+  clean_names()%>%
+  dplyr::select(-lingiso, -lingisopct)%>%
+  mutate(fips = str_sub(id, start=1,end=5))%>%
+  dplyr::select(-contains("t_"))%>%
+  dplyr::select(-contains("p_"))%>%
+  dplyr::select(-contains("b_"))%>%
+  group_by(fips)%>%
+  summarise_all(mean)
+ej
+```
+
+Read in lead data
+
+```{r}
+lead <- read.csv("C:/Users/gulle/OneDrive/Documents/GitHub/final-team-projects-darkolivegreen3/2019bloodtbl.csv")
+lead
+```
+
+
+```{r}
+lead %>% clean_names()
+lead
+
+lead <- lead %>%
+  rename(county = ï..County)
+lead
+
+lead <- lead %>%
+  rename(target_pop = Target.Population.)%>%
+  rename(num_tested = Number.Tested)%>%
+  rename(per_tested = Percent.Tested)%>%
+  rename(num_high_lead = Lead.â...5)%>%
+  rename(per_high_lead_h = Percent.â...5)%>%
+  rename(num_tested_older = Number.Tested.1)%>%
+  rename(five_nine = X5.9)%>%
+  rename(very_high_lead_num = Lead.â...10)
+lead
+
+
+view(lead)
+view(ej)
+
+lead <- filter(lead, county != "STATE")
+lead
+
+
+lead$fips <- ej$fips
+lead
+```
+
+
+Join
+```{r}
+full.join <- lead %>% 
+ left_join(ej, by = "fips")
+full.join
+```
+Read in Brownfields data
+```{r}
+brownfields <- read.csv("C:/Users/gulle/OneDrive/Documents/GitHub/final-team-projects-darkolivegreen3/nc_brownfields_aggregated.csv")
+view(brownfields)
+
+brownfields$fips <- lead$fips
+str(brownfields)
+str(full.join)
+
+as.numeric(brownfields$fips)
+brownfields
+as.numeric(full.join$fips)
+full.join
+
+brown_ej <- brownfields %>% 
+ left_join(ej, by = "fips")
+brown_ej
+
+joined <- lead %>%
+  full_join(brown_ej, by = "fips")
+joined
+
+write.csv(joined,"C:/Users/gulle/OneDrive/Documents/GitHub/final-team-projects-darkolivegreen3/clean_full_data.csv", row.names = FALSE)
+
+```
